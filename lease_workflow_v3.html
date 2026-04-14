@@ -1,0 +1,2197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parallel CP — Lease Pipeline</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script>
+  // Configure PDF.js worker
+  if (typeof pdfjsLib !== 'undefined') {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+</script>
+<style>
+  :root {
+    --ink: #1a1a18;
+    --ink2: #3d3d38;
+    --ink3: #6b6b64;
+    --paper: #f7f5f0;
+    --paper2: #eeecea;
+    --paper3: #e4e1db;
+    --accent: #1a5c3a;
+    --accent2: #2d8a58;
+    --accent-light: #e8f5ee;
+    --amber: #b85c00;
+    --amber-light: #fff3e0;
+    --red: #b82020;
+    --red-light: #fdeaea;
+    --blue: #1a3a6b;
+    --blue-light: #e8eef8;
+    --border: #d8d5ce;
+    --shadow: 0 1px 3px rgba(26,26,24,0.08), 0 4px 16px rgba(26,26,24,0.04);
+    --shadow-lg: 0 4px 24px rgba(26,26,24,0.12);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    min-height: 100vh;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  /* ── HEADER ── */
+  header {
+    background: var(--ink);
+    color: var(--paper);
+    padding: 0 32px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .logo {
+    font-family: 'DM Serif Display', serif;
+    font-size: 18px;
+    letter-spacing: 0.01em;
+  }
+  .logo span { color: #6fcf97; }
+  .header-meta {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: #888;
+    letter-spacing: 0.08em;
+  }
+
+  /* ── LAYOUT ── */
+  .app { display: flex; height: calc(100vh - 56px); }
+
+  /* ── SIDEBAR ── */
+  .sidebar {
+    width: 260px;
+    flex-shrink: 0;
+    background: var(--ink);
+    color: var(--paper);
+    padding: 24px 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .sidebar-section { margin-bottom: 8px; }
+  .sidebar-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    color: #666;
+    padding: 0 20px 8px;
+    text-transform: uppercase;
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 20px;
+    cursor: pointer;
+    font-size: 13px;
+    color: #aaa;
+    transition: all 0.15s;
+    border-left: 2px solid transparent;
+  }
+  .nav-item:hover { background: rgba(255,255,255,0.04); color: var(--paper); }
+  .nav-item.active { color: #6fcf97; border-left-color: #6fcf97; background: rgba(111,207,151,0.06); }
+  .nav-icon { width: 16px; text-align: center; font-size: 14px; }
+  .nav-badge {
+    margin-left: auto;
+    background: #b82020;
+    color: white;
+    font-size: 10px;
+    font-family: 'DM Mono', monospace;
+    padding: 1px 6px;
+    border-radius: 10px;
+    min-width: 18px;
+    text-align: center;
+  }
+  .nav-badge.amber { background: var(--amber); }
+  .sidebar-divider { height: 1px; background: rgba(255,255,255,0.06); margin: 12px 20px; }
+
+  /* ── MAIN ── */
+  .main {
+    flex: 1;
+    overflow-y: auto;
+    padding: 32px;
+    background: var(--paper);
+  }
+
+  .page { display: none; }
+  .page.active { display: block; }
+
+  .page-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-bottom: 28px;
+  }
+  .page-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 28px;
+    line-height: 1.1;
+    color: var(--ink);
+  }
+  .page-subtitle {
+    font-size: 13px;
+    color: var(--ink3);
+    margin-top: 4px;
+  }
+
+  /* ── BUTTONS ── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    border: none;
+    text-decoration: none;
+  }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { background: var(--accent2); }
+  .btn-ghost { background: transparent; color: var(--ink2); border: 1px solid var(--border); }
+  .btn-ghost:hover { background: var(--paper2); }
+  .btn-amber { background: var(--amber-light); color: var(--amber); border: 1px solid #f0c890; }
+  .btn-amber:hover { background: #ffe8c0; }
+  .btn-sm { padding: 5px 10px; font-size: 12px; }
+
+  /* ── STAGE PILLS ── */
+  .stage-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 500;
+    font-family: 'DM Mono', monospace;
+    white-space: nowrap;
+  }
+  .stage-pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.6; }
+  .stage-drafting { background: var(--blue-light); color: var(--blue); }
+  .stage-tenant-signing { background: #f0e8ff; color: #5b21b6; }
+  .stage-funds-pending { background: var(--amber-light); color: var(--amber); }
+  .stage-peter-review { background: #fff0e8; color: #b84c00; }
+  .stage-michael-review { background: #e8f0ff; color: #1a3a8a; }
+  .stage-jim-signing { background: #e8fff4; color: #065f3a; }
+  .stage-executed { background: var(--accent-light); color: var(--accent); }
+  .stage-abstracted { background: var(--paper3); color: var(--ink3); }
+
+  /* ── DEAL CARDS ── */
+  .deals-grid { display: flex; flex-direction: column; gap: 12px; }
+
+  .deal-card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    cursor: pointer;
+    transition: all 0.15s;
+    box-shadow: var(--shadow);
+    position: relative;
+    overflow: hidden;
+  }
+  .deal-card:hover { box-shadow: var(--shadow-lg); border-color: #bbb; transform: translateY(-1px); }
+  .deal-card.overdue::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--red);
+  }
+  .deal-card.waiting::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--amber);
+  }
+  .deal-card.on-track::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--accent2);
+  }
+
+  .deal-card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .deal-tenant {
+    font-family: 'DM Serif Display', serif;
+    font-size: 17px;
+    color: var(--ink);
+  }
+  .deal-property {
+    font-size: 12px;
+    color: var(--ink3);
+    margin-top: 2px;
+    font-family: 'DM Mono', monospace;
+  }
+  .deal-card-mid {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .deal-meta {
+    font-size: 12px;
+    color: var(--ink3);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .deal-card-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--paper2);
+  }
+  .deal-action-needed {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--amber);
+  }
+  .deal-action-needed.red { color: var(--red); }
+  .deal-action-needed.green { color: var(--accent); }
+  .deal-days {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--ink3);
+  }
+
+  /* ── STATS ROW ── */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+  .stat-card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
+  }
+  .stat-label {
+    font-size: 11px;
+    font-family: 'DM Mono', monospace;
+    color: var(--ink3);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .stat-value {
+    font-family: 'DM Serif Display', serif;
+    font-size: 32px;
+    color: var(--ink);
+    line-height: 1;
+  }
+  .stat-sub { font-size: 12px; color: var(--ink3); margin-top: 4px; }
+
+  /* ── MODAL ── */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(26,26,24,0.55);
+    z-index: 200;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 40px 20px;
+    overflow-y: auto;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: white;
+    border-radius: 14px;
+    width: 100%;
+    max-width: 680px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    animation: slideUp 0.2s ease;
+  }
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .modal-header {
+    padding: 24px 28px 20px;
+    border-bottom: 1px solid var(--paper2);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+  .modal-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+  }
+  .modal-close {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 20px;
+    color: var(--ink3);
+    padding: 0;
+    line-height: 1;
+  }
+  .modal-body { padding: 24px 28px; }
+  .modal-footer {
+    padding: 16px 28px 24px;
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    border-top: 1px solid var(--paper2);
+  }
+
+  /* ── TABS inside modal ── */
+  .modal-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .modal-tab {
+    padding: 8px 16px;
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--ink3);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    font-weight: 500;
+    transition: all 0.15s;
+  }
+  .modal-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .modal-tab-content { display: none; }
+  .modal-tab-content.active { display: block; }
+
+  /* ── FORM ELEMENTS ── */
+  .form-group { margin-bottom: 16px; }
+  .form-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink2);
+    margin-bottom: 5px;
+    letter-spacing: 0.02em;
+  }
+  .form-label span { font-weight: 400; color: var(--ink3); }
+  .form-input, .form-select, .form-textarea {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    color: var(--ink);
+    background: white;
+    transition: border 0.15s;
+    outline: none;
+  }
+  .form-input:focus, .form-select:focus, .form-textarea:focus {
+    border-color: var(--accent2);
+    box-shadow: 0 0 0 3px rgba(45,138,88,0.1);
+  }
+  .form-textarea { resize: vertical; min-height: 80px; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .form-hint { font-size: 11px; color: var(--ink3); margin-top: 4px; }
+
+  /* ── EMAIL PREVIEW ── */
+  .email-preview {
+    background: var(--paper);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    font-size: 13px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    font-family: 'DM Sans', sans-serif;
+    color: var(--ink2);
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  .email-subject {
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--ink3);
+    margin-bottom: 8px;
+    font-family: 'DM Mono', monospace;
+    letter-spacing: 0.04em;
+  }
+
+  /* ── CHECKLIST ── */
+  .checklist { list-style: none; }
+  .checklist li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--paper2);
+    font-size: 13px;
+  }
+  .checklist li:last-child { border-bottom: none; }
+  .checklist input[type=checkbox] { margin-top: 2px; accent-color: var(--accent); width: 15px; height: 15px; flex-shrink: 0; }
+  .checklist .check-label { flex: 1; }
+  .checklist .check-label.done { text-decoration: line-through; color: var(--ink3); }
+  .checklist .check-sub { font-size: 11px; color: var(--ink3); margin-top: 2px; }
+
+  /* ── PIPELINE VIEW ── */
+  .pipeline-stages {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+  .pipeline-col { }
+  .pipeline-col-header {
+    font-size: 11px;
+    font-family: 'DM Mono', monospace;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: var(--ink3);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    padding: 0 2px;
+  }
+  .pipeline-mini-card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .pipeline-mini-card:hover { box-shadow: var(--shadow); border-color: #bbb; }
+  .pipeline-mini-tenant { font-weight: 600; font-size: 13px; margin-bottom: 3px; }
+  .pipeline-mini-meta { color: var(--ink3); font-size: 11px; }
+
+  /* ── SECTION LABEL ── */
+  .section-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink3);
+    margin-bottom: 12px;
+    margin-top: 24px;
+  }
+  .section-label:first-child { margin-top: 0; }
+
+  /* ── ALERTS ── */
+  .alert {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 10px;
+  }
+  .alert-amber { background: var(--amber-light); border: 1px solid #f0c890; color: var(--amber); }
+  .alert-red { background: var(--red-light); border: 1px solid #f5bcbc; color: var(--red); }
+  .alert-green { background: var(--accent-light); border: 1px solid #a8dfc0; color: var(--accent); }
+  .alert-icon { font-size: 16px; flex-shrink: 0; }
+  .alert-text { flex: 1; }
+  .alert-text strong { display: block; font-weight: 600; margin-bottom: 2px; }
+  .alert-actions { display: flex; gap: 8px; margin-top: 8px; }
+
+  /* ── YARDI ABSTRACT ── */
+  .yardi-table { width: 100%; border-collapse: collapse; }
+  .yardi-table th {
+    text-align: left;
+    font-size: 10px;
+    font-family: 'DM Mono', monospace;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink3);
+    padding: 6px 12px;
+    background: var(--paper2);
+    border-bottom: 1px solid var(--border);
+  }
+  .yardi-table td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--paper2);
+    font-size: 13px;
+  }
+  .yardi-table td:first-child { color: var(--ink3); font-size: 12px; width: 45%; }
+  .yardi-table td:last-child { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--ink); font-weight: 500; }
+  .yardi-section-row td {
+    background: var(--paper);
+    font-size: 10px;
+    font-family: 'DM Mono', monospace;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink3);
+    padding: 6px 12px;
+    font-weight: 600;
+  }
+
+  /* ── UPLOAD PAGE ── */
+  .doc-type-btn {
+    background: white;
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    cursor: pointer;
+    transition: all 0.15s;
+    min-width: 180px;
+    text-align: center;
+  }
+  .doc-type-btn:hover { border-color: var(--accent2); }
+  .doc-type-btn.active { border-color: var(--accent); background: var(--accent-light); }
+  .doc-type-icon { font-size: 24px; margin-bottom: 6px; }
+  .doc-type-label { font-weight: 600; font-size: 14px; color: var(--ink); }
+  .doc-type-sub { font-size: 11px; color: var(--ink3); margin-top: 2px; }
+
+  .drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 48px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s;
+    background: white;
+    max-width: 600px;
+  }
+  .drop-zone:hover, .drop-zone.dragover { border-color: var(--accent2); background: var(--accent-light); }
+  .drop-zone-icon { font-size: 32px; margin-bottom: 12px; color: var(--ink3); }
+  .drop-zone-text { font-size: 15px; font-weight: 500; color: var(--ink2); margin-bottom: 6px; }
+  .drop-zone-sub { font-size: 12px; color: var(--ink3); }
+
+  .extracted-field {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    box-shadow: var(--shadow);
+  }
+  .extracted-field-label { font-size: 11px; font-family: 'DM Mono', monospace; color: var(--ink3); letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 4px; }
+  .extracted-field-value { font-size: 14px; font-weight: 500; color: var(--ink); }
+  .extracted-field-value.uncertain { color: var(--amber); }
+  .extracted-field-value.missing { color: var(--ink3); font-style: italic; font-weight: 400; }
+  .extracted-field input { width: 100%; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; font-size: 13px; margin-top: 4px; outline: none; }
+  .extracted-field input:focus { border-color: var(--accent2); }
+  .confidence-pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-family: 'DM Mono', monospace; }
+  .conf-high { background: var(--accent-light); color: var(--accent); }
+  .conf-med { background: var(--amber-light); color: var(--amber); }
+
+  .spinner {
+    width: 36px; height: 36px;
+    border: 3px solid var(--paper2);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin: 0 auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── TOAST ── */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--ink);
+    color: white;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-size: 13px;
+    z-index: 999;
+    display: none;
+    align-items: center;
+    gap: 8px;
+    box-shadow: var(--shadow-lg);
+    animation: toastIn 0.2s ease;
+  }
+  .toast.show { display: flex; }
+  @keyframes toastIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── ADD DEAL FORM ── */
+  .add-deal-form { max-width: 480px; }
+
+  /* ── STAGE PROGRESS ── */
+  .stage-progress {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin: 16px 0;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .stage-step {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .stage-dot {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    border: 2px solid var(--border);
+    background: white;
+    color: var(--ink3);
+    position: relative;
+    z-index: 1;
+    flex-shrink: 0;
+  }
+  .stage-dot.done { background: var(--accent); border-color: var(--accent); color: white; }
+  .stage-dot.current { background: var(--amber); border-color: var(--amber); color: white; }
+  .stage-line {
+    height: 2px;
+    width: 32px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+  .stage-line.done { background: var(--accent); }
+
+  /* ── EMPTY STATE ── */
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--ink3);
+  }
+  .empty-state-icon { font-size: 40px; margin-bottom: 12px; }
+  .empty-state-title { font-family: 'DM Serif Display', serif; font-size: 20px; color: var(--ink2); margin-bottom: 8px; }
+  .empty-state-sub { font-size: 13px; margin-bottom: 20px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Parallel <span>CP</span> — Lease Pipeline</div>
+  <div class="header-meta">ISABELLE DUNWOODY · LEGAL OPS</div>
+</header>
+
+<div class="app">
+  <!-- SIDEBAR -->
+  <nav class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-label">Pipeline</div>
+      <div class="nav-item active" onclick="showPage('dashboard')" id="nav-dashboard">
+        <span class="nav-icon">◈</span> Dashboard
+        <span class="nav-badge" id="badge-attention">0</span>
+      </div>
+      <div class="nav-item" onclick="showPage('pipeline')" id="nav-pipeline">
+        <span class="nav-icon">⊞</span> All Deals
+      </div>
+    </div>
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">Actions</div>
+      <div class="nav-item" onclick="showPage('waiting')" id="nav-waiting">
+        <span class="nav-icon">⏳</span> Waiting On Others
+        <span class="nav-badge amber" id="badge-waiting">0</span>
+      </div>
+      <div class="nav-item" onclick="showPage('drafts')" id="nav-drafts">
+        <span class="nav-icon">✉</span> Email Drafts
+      </div>
+    </div>
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">Add</div>
+      <div class="nav-item" onclick="openAddDeal()">
+        <span class="nav-icon">＋</span> New Deal
+      </div>
+      <div class="nav-item" onclick="showPage('upload')" id="nav-upload">
+        <span class="nav-icon">⬆</span> Upload Documents
+      </div>
+    </div>
+  </nav>
+
+  <!-- MAIN -->
+  <main class="main">
+
+    <!-- DASHBOARD -->
+    <div class="page active" id="page-dashboard">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Good morning, Isabelle.</div>
+          <div class="page-subtitle" id="dashboard-date">Loading...</div>
+        </div>
+        <button class="btn btn-primary" onclick="openAddDeal()">＋ New Deal</button>
+      </div>
+
+      <div class="stats-row" id="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">Active Deals</div>
+          <div class="stat-value" id="stat-active">0</div>
+          <div class="stat-sub">in pipeline</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Need Attention</div>
+          <div class="stat-value" id="stat-attention" style="color:var(--red)">0</div>
+          <div class="stat-sub">overdue or stalled</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Waiting On Others</div>
+          <div class="stat-value" id="stat-waiting" style="color:var(--amber)">0</div>
+          <div class="stat-sub">Peter, PM, Michael, Jim</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Closed This Month</div>
+          <div class="stat-value" id="stat-closed" style="color:var(--accent)">0</div>
+          <div class="stat-sub">executed leases</div>
+        </div>
+      </div>
+
+      <div class="section-label">Needs your attention</div>
+      <div id="attention-list"></div>
+
+      <div class="section-label" style="margin-top:28px">All active deals</div>
+      <div class="deals-grid" id="dashboard-deals"></div>
+    </div>
+
+    <!-- ALL DEALS PIPELINE -->
+    <div class="page" id="page-pipeline">
+      <div class="page-header">
+        <div>
+          <div class="page-title">All Deals</div>
+          <div class="page-subtitle">Full pipeline view by stage</div>
+        </div>
+        <button class="btn btn-primary" onclick="openAddDeal()">＋ New Deal</button>
+      </div>
+      <div class="deals-grid" id="pipeline-deals"></div>
+    </div>
+
+    <!-- WAITING ON OTHERS -->
+    <div class="page" id="page-waiting">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Waiting On Others</div>
+          <div class="page-subtitle">Deals blocked by someone else</div>
+        </div>
+      </div>
+      <div id="waiting-list"></div>
+    </div>
+
+    <!-- EMAIL DRAFTS -->
+    <div class="page" id="page-drafts">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Email Drafts</div>
+          <div class="page-subtitle">Ready-to-send emails for active deals</div>
+        </div>
+      </div>
+      <div id="drafts-list"></div>
+    </div>
+
+    <!-- UPLOAD DOCUMENTS PAGE -->
+    <div class="page" id="page-upload">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Upload Documents</div>
+          <div class="page-subtitle">Drop in an LOI, lease draft, or tenant-signed lease — AI extracts the terms and populates your spreadsheet</div>
+        </div>
+      </div>
+
+      <!-- Doc type selector -->
+      <div style="display:flex;gap:12px;margin-bottom:28px;flex-wrap:wrap">
+        <div class="doc-type-btn active" data-type="loi" onclick="selectDocType('loi')">
+          <div class="doc-type-icon">📋</div>
+          <div class="doc-type-label">Letter of Intent</div>
+          <div class="doc-type-sub">Extract initial deal terms</div>
+        </div>
+        <div class="doc-type-btn" data-type="draft" onclick="selectDocType('draft')">
+          <div class="doc-type-icon">📝</div>
+          <div class="doc-type-label">Lease Draft</div>
+          <div class="doc-type-sub">Extract finalized terms</div>
+        </div>
+        <div class="doc-type-btn" data-type="executed" onclick="selectDocType('executed')">
+          <div class="doc-type-icon">✍️</div>
+          <div class="doc-type-label">Tenant-Signed Lease</div>
+          <div class="doc-type-sub">Extract execution details</div>
+        </div>
+      </div>
+
+      <!-- Drop zone -->
+      <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+        <div class="drop-zone-icon">⬆</div>
+        <div class="drop-zone-text">Drop your document here or click to browse</div>
+        <div class="drop-zone-sub">PDF or DOCX · LOI, lease draft, or executed lease</div>
+        <input type="file" id="file-input" accept=".pdf,.docx,.doc" style="display:none" onchange="handleFileSelect(event)">
+      </div>
+      <div id="upload-file-name" style="font-size:12px;color:var(--ink3);margin-top:8px;text-align:center"></div>
+
+      <!-- Deal association -->
+      <div class="form-group" style="margin-top:20px;max-width:400px">
+        <label class="form-label">Associate with deal <span>(optional — or create new)</span></label>
+        <select class="form-select" id="upload-deal-select">
+          <option value="new">＋ Create new deal from this document</option>
+        </select>
+      </div>
+
+      <button class="btn btn-primary" id="extract-btn" onclick="extractDocument()" disabled style="margin-top:4px">
+        Extract Terms with AI
+      </button>
+
+      <!-- Extraction results -->
+      <div id="extraction-results" style="display:none;margin-top:32px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <div class="page-title" style="font-size:20px">Extracted Terms</div>
+          <div style="display:flex;gap:10px">
+            <button class="btn btn-ghost" onclick="resetUpload()">Upload another</button>
+            <button class="btn btn-primary" id="apply-btn" onclick="applyExtracted()">Apply to Deal + Download Spreadsheet</button>
+          </div>
+        </div>
+        <div id="confidence-bar" style="margin-bottom:20px"></div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px" id="extracted-fields-grid"></div>
+
+        <div style="margin-top:20px;padding:16px;background:var(--accent-light);border:1px solid #a8dfc0;border-radius:8px;font-size:13px;color:var(--accent)">
+          <strong>What happens when you click Apply:</strong> The extracted terms are saved to this deal in the pipeline, all emails auto-update, and a pre-filled copy of your Excel template is downloaded ready to open.
+        </div>
+      </div>
+
+      <!-- Loading state -->
+      <div id="extraction-loading" style="display:none;text-align:center;padding:60px 20px">
+        <div class="spinner"></div>
+        <div style="margin-top:16px;font-size:14px;color:var(--ink3)" id="loading-msg">Reading document...</div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- DEAL DETAIL MODAL -->
+<div class="modal-overlay" id="deal-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="modal-tenant">—</div>
+        <div style="margin-top:6px" id="modal-stage-pill"></div>
+      </div>
+      <button class="modal-close" onclick="closeModal('deal-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-tabs">
+        <div class="modal-tab active" onclick="switchTab('deal', 'overview')">Overview</div>
+        <div class="modal-tab" onclick="switchTab('deal', 'actions')">Actions</div>
+        <div class="modal-tab" onclick="switchTab('deal', 'emails')">Emails</div>
+        <div class="modal-tab" onclick="switchTab('deal', 'yardi')">Yardi Abstract</div>
+      </div>
+
+      <!-- OVERVIEW TAB -->
+      <div class="modal-tab-content active" id="deal-tab-overview">
+        <div class="stage-progress" id="modal-progress"></div>
+        <div class="form-row" style="margin-bottom:16px">
+          <div>
+            <div class="form-label">Property</div>
+            <div id="d-property" style="font-size:13px">—</div>
+          </div>
+          <div>
+            <div class="form-label">Suite</div>
+            <div id="d-suite" style="font-size:13px">—</div>
+          </div>
+        </div>
+        <div class="form-row" style="margin-bottom:16px">
+          <div>
+            <div class="form-label">Square Footage</div>
+            <div id="d-sf" style="font-size:13px">—</div>
+          </div>
+          <div>
+            <div class="form-label">Lease Type</div>
+            <div id="d-type" style="font-size:13px">—</div>
+          </div>
+        </div>
+        <div class="form-row" style="margin-bottom:16px">
+          <div>
+            <div class="form-label">Term</div>
+            <div id="d-term" style="font-size:13px">—</div>
+          </div>
+          <div>
+            <div class="form-label">Commencement</div>
+            <div id="d-commence" style="font-size:13px">—</div>
+          </div>
+        </div>
+        <div class="form-row" style="margin-bottom:16px">
+          <div>
+            <div class="form-label">Initial Rate</div>
+            <div id="d-rate" style="font-size:13px">—</div>
+          </div>
+          <div>
+            <div class="form-label">Total Consideration</div>
+            <div id="d-total" style="font-size:13px">—</div>
+          </div>
+        </div>
+        <div class="form-row" style="margin-bottom:16px">
+          <div>
+            <div class="form-label">Escalation</div>
+            <div id="d-esc" style="font-size:13px">—</div>
+          </div>
+          <div>
+            <div class="form-label">Free Rent</div>
+            <div id="d-free" style="font-size:13px">—</div>
+          </div>
+        </div>
+        <div style="margin-bottom:16px">
+          <div class="form-label">Peter's Deal Notes</div>
+          <div id="d-notes" style="font-size:13px;color:var(--ink3)">—</div>
+        </div>
+        <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--paper2);display:flex;gap:10px;align-items:center">
+          <label class="form-label" style="margin:0">Move to stage:</label>
+          <select class="form-select" style="width:auto;flex:1" id="stage-select" onchange="updateStageFromModal()"></select>
+          <button class="btn btn-primary btn-sm" onclick="saveStage()">Update</button>
+        </div>
+      </div>
+
+      <!-- ACTIONS TAB -->
+      <div class="modal-tab-content" id="deal-tab-actions">
+        <div id="actions-content"></div>
+      </div>
+
+      <!-- EMAILS TAB -->
+      <div class="modal-tab-content" id="deal-tab-emails">
+        <div id="emails-content"></div>
+      </div>
+
+      <!-- YARDI TAB -->
+      <div class="modal-tab-content" id="deal-tab-yardi">
+        <div id="yardi-content"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="deleteDeal()">Delete deal</button>
+      <button class="btn btn-ghost" onclick="closeModal('deal-modal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD DEAL MODAL -->
+<div class="modal-overlay" id="add-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Add New Deal</div>
+      <button class="modal-close" onclick="closeModal('add-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Tenant Name *</label>
+          <input class="form-input" id="f-tenant" placeholder="e.g. Tan Minh Hguyen, MD, Inc">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Business Type</label>
+          <input class="form-input" id="f-biztype" placeholder="e.g. Medical practice">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Property Name *</label>
+          <select class="form-select" id="f-property">
+            <option value="">Select property...</option>
+            <option>Rose Canyon — Building 100</option>
+            <option>Rose Canyon — Building 200</option>
+            <option>Rose Canyon — Building 300</option>
+            <option>Rose Canyon — Building 400</option>
+            <option>Rose Canyon — Building 1400</option>
+            <option>Rose Canyon — Courtyard</option>
+            <option>Matter Gateway</option>
+            <option>UnCommons</option>
+            <option>UnCommons II</option>
+            <option>One North Central</option>
+            <option>Torrey Center</option>
+            <option>Waterfront Plaza</option>
+            <option>Waikiki Marketplace</option>
+            <option>The Ranch</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Suite Number *</label>
+          <input class="form-input" id="f-suite" placeholder="e.g. 308">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Square Footage</label>
+          <input class="form-input" id="f-sf" type="number" placeholder="e.g. 888">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Lease Type</label>
+          <select class="form-select" id="f-leasetype">
+            <option>New</option>
+            <option>Renewal</option>
+            <option>Expansion</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Term (months)</label>
+          <input class="form-input" id="f-term" type="number" placeholder="e.g. 48">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Commencement Date</label>
+          <input class="form-input" id="f-commence" type="date">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Initial Rate ($/RSF/Mo)</label>
+          <input class="form-input" id="f-rate" type="number" step="0.01" placeholder="e.g. 2.15">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Annual Escalation</label>
+          <input class="form-input" id="f-esc" type="number" step="0.5" placeholder="e.g. 4">
+          <div class="form-hint">Enter as percentage, e.g. 4 for 4%</div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Free Rent (months)</label>
+          <input class="form-input" id="f-free" type="number" placeholder="e.g. 1">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Security Deposit ($)</label>
+          <input class="form-input" id="f-deposit" type="number" step="0.01">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Outside Broker / Tenant Rep Agency</label>
+        <input class="form-input" id="f-broker" placeholder="e.g. Tobias Real Estate, or N/A">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Current Stage</label>
+        <select class="form-select" id="f-stage">
+          <option value="drafting">Drafting Lease</option>
+          <option value="tenant-signing">Sent to Tenant (DocuSign)</option>
+          <option value="funds-pending">Confirming Funds w/ PM</option>
+          <option value="peter-review">Peter: Deal Notes + Approval</option>
+          <option value="michael-review">Michael: Approval</option>
+          <option value="jim-signing">Jim: Countersignature (DocuSign)</option>
+          <option value="executed">Executed — Circulating</option>
+          <option value="abstracted">Abstracted in Yardi ✓</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('add-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveDeal()">Add Deal</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast">✓ <span id="toast-msg">Copied to clipboard</span></div>
+
+<script>
+// ── DATA ──────────────────────────────────────────────────────────────────
+const STAGES = [
+  { id: 'drafting',        label: 'Drafting Lease',               pill: 'stage-drafting',       waiting: false },
+  { id: 'tenant-signing',  label: 'Sent to Tenant (DocuSign)',    pill: 'stage-tenant-signing',  waiting: true, waitingOn: 'Tenant' },
+  { id: 'funds-pending',   label: 'Confirming Funds w/ PM',       pill: 'stage-funds-pending',   waiting: true, waitingOn: 'Property Mgmt' },
+  { id: 'peter-review',    label: 'Peter: Deal Notes + Approval', pill: 'stage-peter-review',    waiting: true, waitingOn: 'Peter' },
+  { id: 'michael-review',  label: 'Michael: Approval',            pill: 'stage-michael-review',  waiting: true, waitingOn: 'Michael' },
+  { id: 'jim-signing',     label: 'Jim: Countersignature',        pill: 'stage-jim-signing',     waiting: true, waitingOn: 'Jim' },
+  { id: 'executed',        label: 'Executed — Circulating',       pill: 'stage-executed',        waiting: false },
+  { id: 'abstracted',      label: 'Abstracted in Yardi ✓',        pill: 'stage-abstracted',      waiting: false },
+];
+
+let deals = [];
+let currentDealId = null;
+
+// ── STORAGE ───────────────────────────────────────────────────────────────
+async function loadDeals() {
+  try {
+    const r = await window.storage.get('deals');
+    deals = r ? JSON.parse(r.value) : [];
+  } catch(e) {
+    deals = [];
+  }
+  // seed demo data if empty
+  if (deals.length === 0) {
+    deals = [
+      {
+        id: 'd1', tenant: 'Tan Minh Hguyen, MD, Inc', biztype: 'Medical practice — musculoskeletal radiology',
+        property: 'Rose Canyon — Building 1400', suite: '308', sf: 888, leasetype: 'New',
+        term: 48, commence: '2026-05-01', rate: 2.15, esc: 4, free: 1, deposit: 1930.20,
+        broker: 'N/A', stage: 'peter-review', stageDate: daysAgo(4),
+        notes: '', totalConsideration: 110476.80
+      },
+      {
+        id: 'd2', tenant: 'CEC Electric, Inc.', biztype: 'Electrical & communications contractor',
+        property: 'Rose Canyon — Building 1400', suite: '1404', sf: 1451, leasetype: 'New',
+        term: 24, commence: '2026-04-01', rate: 2.0, esc: 2.5, free: 0, deposit: 2902,
+        broker: 'Tobias Real Estate', stage: 'abstracted', stageDate: daysAgo(2),
+        notes: 'New tenant, electrical contractor. No TI required. Taking space vacated by prior tenant. NER $22.42/SF/yr vs underwriting $20.09.', totalConsideration: 70518.60
+      },
+      {
+        id: 'd3', tenant: 'Pacific Wellness Group', biztype: 'Physical therapy clinic',
+        property: 'Rose Canyon — Building 200', suite: '210', sf: 1620, leasetype: 'Renewal',
+        term: 36, commence: '2026-06-01', rate: 2.35, esc: 3, free: 0, deposit: 3819,
+        broker: 'C&W', stage: 'funds-pending', stageDate: daysAgo(6),
+        notes: '', totalConsideration: 140054.40
+      },
+      {
+        id: 'd4', tenant: 'Skyline Consulting LLC', biztype: 'Management consulting',
+        property: 'One North Central', suite: '450', sf: 3200, leasetype: 'New',
+        term: 60, commence: '2026-07-01', rate: 3.10, esc: 3, free: 2, deposit: 9920,
+        broker: 'JLL', stage: 'tenant-signing', stageDate: daysAgo(8),
+        notes: '', totalConsideration: 595200
+      },
+    ];
+    await saveDeals();
+  }
+  render();
+}
+
+async function saveDeals() {
+  try { await window.storage.set('deals', JSON.stringify(deals)); } catch(e){}
+}
+
+function daysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString();
+}
+
+// ── UTILS ─────────────────────────────────────────────────────────────────
+function stageObj(id) { return STAGES.find(s => s.id === id) || STAGES[0]; }
+function daysSince(iso) {
+  if (!iso) return 0;
+  return Math.floor((Date.now() - new Date(iso)) / 86400000);
+}
+function fmt(n) { return n ? Number(n).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2}) : '—'; }
+function fmtDate(d) { if(!d) return '—'; const dt = new Date(d+'T12:00:00'); return dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
+function fmtRate(r) { return r ? `$${Number(r).toFixed(2)}/RSF/Mo` : '—'; }
+function calcExpiration(commence, termMonths) {
+  if (!commence || !termMonths) return '—';
+  const d = new Date(commence+'T12:00:00');
+  d.setMonth(d.getMonth() + Number(termMonths));
+  d.setDate(d.getDate() - 1);
+  return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+}
+function calcNER(deal) {
+  if (!deal.sf || !deal.term || !deal.rate) return null;
+  const sf = Number(deal.sf), term = Number(deal.term), rate = Number(deal.rate);
+  const esc = deal.esc ? Number(deal.esc)/100 : 0;
+  let total = 0, monthly = rate * sf;
+  for (let m = 0; m < term; m++) {
+    const yr = Math.floor(m/12);
+    const mo = monthly * Math.pow(1+esc, yr);
+    if (m >= (deal.free || 0)) total += mo;
+  }
+  return total / (term * sf) * 12;
+}
+
+function isOverdue(deal) {
+  const days = daysSince(deal.stageDate);
+  if (deal.stage === 'tenant-signing' && days > 7) return true;
+  if (deal.stage === 'funds-pending' && days > 5) return true;
+  if (deal.stage === 'peter-review' && days > 3) return true;
+  if (deal.stage === 'michael-review' && days > 3) return true;
+  if (deal.stage === 'jim-signing' && days > 5) return true;
+  if (deal.stage === 'executed' && days > 3) return true;
+  return false;
+}
+function isWaiting(deal) { return stageObj(deal.stage).waiting; }
+
+// ── RENDER ────────────────────────────────────────────────────────────────
+function render() {
+  const active = deals.filter(d => d.stage !== 'abstracted');
+  const attention = active.filter(isOverdue);
+  const waiting = active.filter(isWaiting);
+  const closed = deals.filter(d => {
+    const s = d.stage === 'executed' || d.stage === 'abstracted';
+    const thisMonth = new Date(d.stageDate).getMonth() === new Date().getMonth();
+    return s && thisMonth;
+  });
+
+  document.getElementById('stat-active').textContent = active.length;
+  document.getElementById('stat-attention').textContent = attention.length;
+  document.getElementById('stat-waiting').textContent = waiting.length;
+  document.getElementById('stat-closed').textContent = closed.length;
+  document.getElementById('badge-attention').textContent = attention.length;
+  document.getElementById('badge-waiting').textContent = waiting.length;
+
+  const now = new Date();
+  document.getElementById('dashboard-date').textContent =
+    now.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+
+  renderAttention();
+  renderDealList('dashboard-deals', active);
+  renderDealList('pipeline-deals', deals);
+  renderWaiting();
+  renderDrafts();
+}
+
+function renderDealCard(deal) {
+  const stage = stageObj(deal.stage);
+  const days = daysSince(deal.stageDate);
+  const overdue = isOverdue(deal);
+  const waiting = isWaiting(deal);
+  const cls = overdue ? 'overdue' : waiting ? 'waiting' : 'on-track';
+
+  let actionHtml = '';
+  if (overdue) {
+    actionHtml = `<div class="deal-action-needed red">⚠ Overdue — ${days}d in "${stage.label}"</div>`;
+  } else if (waiting) {
+    actionHtml = `<div class="deal-action-needed">↻ Waiting on ${stage.waitingOn} — ${days}d</div>`;
+  } else {
+    actionHtml = `<div class="deal-action-needed green">✓ On track — ${days}d in stage</div>`;
+  }
+
+  return `
+    <div class="deal-card ${cls}" onclick="openDeal('${deal.id}')">
+      <div class="deal-card-top">
+        <div>
+          <div class="deal-tenant">${deal.tenant}</div>
+          <div class="deal-property">${deal.property} · Suite ${deal.suite}</div>
+        </div>
+        <span class="stage-pill ${stage.pill}">${stage.label}</span>
+      </div>
+      <div class="deal-card-mid">
+        <div class="deal-meta">⬛ ${deal.sf ? Number(deal.sf).toLocaleString() : '—'} RSF</div>
+        <div class="deal-meta">⬛ ${deal.term || '—'} mo ${deal.leasetype}</div>
+        <div class="deal-meta">⬛ ${fmtRate(deal.rate)}</div>
+        ${deal.totalConsideration ? `<div class="deal-meta">⬛ $${fmt(deal.totalConsideration)}</div>` : ''}
+      </div>
+      <div class="deal-card-bottom">
+        ${actionHtml}
+        <div class="deal-days">${deal.leasetype} · ${deal.biztype || '—'}</div>
+      </div>
+    </div>`;
+}
+
+function renderDealList(containerId, list) {
+  const el = document.getElementById(containerId);
+  if (!list.length) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-title">No deals yet</div><div class="empty-state-sub">Add your first deal to get started.</div><button class="btn btn-primary" onclick="openAddDeal()">＋ New Deal</button></div>`;
+    return;
+  }
+  el.innerHTML = list.map(renderDealCard).join('');
+}
+
+function renderAttention() {
+  const attention = deals.filter(d => d.stage !== 'abstracted' && isOverdue(d));
+  const el = document.getElementById('attention-list');
+  if (!attention.length) {
+    el.innerHTML = `<div class="alert alert-green"><div class="alert-icon">✓</div><div class="alert-text"><strong>All clear</strong>No deals are overdue or stalled right now.</div></div>`;
+    return;
+  }
+  el.innerHTML = attention.map(deal => {
+    const stage = stageObj(deal.stage);
+    const days = daysSince(deal.stageDate);
+    const emails = getEmailsForStage(deal);
+    const emailBtns = emails.map(e => `<button class="btn btn-amber btn-sm" onclick="openDealTab('${deal.id}','emails')">${e.label}</button>`).join('');
+    return `<div class="alert alert-${isOverdue(deal)?'red':'amber'}">
+      <div class="alert-icon">${isOverdue(deal)?'⚠':'↻'}</div>
+      <div class="alert-text">
+        <strong>${deal.tenant} — ${stage.label}</strong>
+        ${days} days in this stage${stage.waitingOn ? ` · waiting on ${stage.waitingOn}` : ''}
+        <div class="alert-actions">
+          <button class="btn btn-ghost btn-sm" onclick="openDeal('${deal.id}')">View deal</button>
+          ${emailBtns}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderWaiting() {
+  const waiting = deals.filter(d => d.stage !== 'abstracted' && isWaiting(d));
+  const el = document.getElementById('waiting-list');
+  if (!waiting.length) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">🎉</div><div class="empty-state-title">Nothing waiting</div><div class="empty-state-sub">No deals are currently blocked by others.</div></div>`;
+    return;
+  }
+  // Group by who we're waiting on
+  const groups = {};
+  waiting.forEach(d => {
+    const w = stageObj(d.stage).waitingOn || 'Other';
+    if (!groups[w]) groups[w] = [];
+    groups[w].push(d);
+  });
+  el.innerHTML = Object.entries(groups).map(([who, dls]) => `
+    <div class="section-label">Waiting on ${who}</div>
+    <div class="deals-grid">${dls.map(renderDealCard).join('')}</div>
+  `).join('');
+}
+
+function renderDrafts() {
+  const active = deals.filter(d => d.stage !== 'abstracted');
+  const el = document.getElementById('drafts-list');
+  if (!active.length) { el.innerHTML = '<div class="empty-state"><div class="empty-state-title">No active deals</div></div>'; return; }
+  el.innerHTML = active.map(deal => {
+    const emails = getEmailsForStage(deal);
+    if (!emails.length) return '';
+    return `<div style="margin-bottom:24px">
+      <div class="section-label">${deal.tenant} · ${deal.property} Suite ${deal.suite}</div>
+      ${emails.map(e => `
+        <div style="background:white;border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:12px;box-shadow:var(--shadow)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <div style="font-weight:600;font-size:14px">${e.label}</div>
+            <button class="btn btn-primary btn-sm" onclick="copyEmail(\`${escape(e.subject)}\`,\`${escape(e.body)}\`)">Copy to clipboard</button>
+          </div>
+          <div class="email-subject">SUBJECT: ${e.subject}</div>
+          <div class="email-preview">${e.body}</div>
+        </div>`).join('')}
+    </div>`;
+  }).filter(Boolean).join('');
+  if (!el.innerHTML) el.innerHTML = `<div class="empty-state"><div class="empty-state-title">No emails needed right now</div><div class="empty-state-sub">Emails generate based on the current stage of each deal.</div></div>`;
+}
+
+// ── EMAIL GENERATORS ──────────────────────────────────────────────────────
+function getEmailsForStage(deal) {
+  const emails = [];
+  const ner = calcNER(deal);
+  const nerStr = ner ? `$${ner.toFixed(2)}/SF/yr` : 'TBD';
+  const expiry = calcExpiration(deal.commence, deal.term);
+
+  if (deal.stage === 'peter-review') {
+    emails.push({
+      label: '→ Request deal notes from Peter',
+      subject: `Deal Notes Needed | ${deal.property} · Suite ${deal.suite} | ${deal.tenant}`,
+      body: `Hi Peter,\n\nI have the tenant-executed lease ready for ${deal.tenant} at ${deal.property}, Suite ${deal.suite} (${deal.sf ? Number(deal.sf).toLocaleString() : '—'} RSF). Funds have been confirmed by PM.\n\nBefore I send the package to Michael, could you please provide your deal notes for this one? Once I have those, I'll put together the full approval package.\n\nKey terms for reference:\n• Lease Type: ${deal.leasetype} · ${deal.leasetype === 'New' ? 'NNN' : deal.leasetype}\n• Term: ${deal.term || '—'} months\n• Commencement: ${fmtDate(deal.commence)}\n• Expiration: ${expiry}\n• Initial Rate: ${fmtRate(deal.rate)}\n• Annual Escalation: ${deal.esc || '—'}%\n• Free Rent: ${deal.free || 0} month(s)\n• Total Consideration: $${fmt(deal.totalConsideration)}\n• NER: ${nerStr}\n\nThanks!\nIsabelle`
+    });
+  }
+
+  if (deal.stage === 'funds-pending') {
+    emails.push({
+      label: '→ Follow up with PM on funds',
+      subject: `Funds Confirmation Needed | ${deal.property} Suite ${deal.suite} | ${deal.tenant}`,
+      body: `Hi,\n\nFollowing up on the funds for ${deal.tenant} at ${deal.property}, Suite ${deal.suite}.\n\nCould you please confirm whether you've received the first month's rent and security deposit?\n\n• 1st Month's Rent: $${fmt(deal.rate && deal.sf ? Number(deal.rate) * Number(deal.sf) : null)}\n• Security Deposit: $${fmt(deal.deposit)}\n\nI'm waiting on this confirmation before moving the lease to the approval chain. Please let me know!\n\nThanks,\nIsabelle`
+    });
+  }
+
+  if (deal.stage === 'michael-review') {
+    emails.push({
+      label: '→ Send approval package to Michael',
+      subject: `FOR APPROVAL | ${deal.property} · ${deal.leasetype} Lease | ${deal.tenant}`,
+      body: `Hi Michael,\n\nPlease see the attached tenant-executed lease and leasing package for ${deal.tenant} at ${deal.property}, Suite ${deal.suite}. Peter's approval is noted below.\n\n${deal.notes ? `Peter's Deal Notes:\n${deal.notes}\n\n` : ''}Key Terms:\n• SF: ${deal.sf ? Number(deal.sf).toLocaleString() : '—'} RSF\n• Lease Type: ${deal.leasetype} · NNN\n• Term: ${deal.term || '—'} months\n• Commencement: ${fmtDate(deal.commence)} · Expiration: ${expiry}\n• Initial Rate: ${fmtRate(deal.rate)} · Escalation: ${deal.esc || '—'}%\n• Free Rent: ${deal.free || 0} month(s)\n• Total Consideration: $${fmt(deal.totalConsideration)}\n• NER: ${nerStr}\n• Outside Broker: ${deal.broker || 'N/A'}\n\nPlease let me know if you approve. Once confirmed, I'll send to Jim for countersignature.\n\nThanks,\nIsabelle`
+    });
+  }
+
+  if (deal.stage === 'executed' || deal.stage === 'jim-signing') {
+    emails.push({
+      label: '→ New lease announcement email',
+      subject: `New Lease | ${deal.property} | ${deal.tenant}`,
+      body: `Hi All,\n\nPlease see the attached fully executed lease for ${deal.tenant} at ${deal.property}. Below are the key deal terms:\n\nTenant: ${deal.tenant}\nBusiness: ${deal.biztype || '—'}\nProperty: ${deal.property}\nSuite: ${deal.suite}\nSquare Footage: ${deal.sf ? Number(deal.sf).toLocaleString() : '—'} RSF\nLease Type: ${deal.leasetype} · NNN\nTerm: ${deal.term || '—'} months\nCommencement: ${fmtDate(deal.commence)}\nExpiration: ${expiry}\nInitial Rate: ${fmtRate(deal.rate)}\nAnnual Escalation: ${deal.esc || '—'}%\nFree Rent: ${deal.free || 0} month(s)\nTotal Consideration: $${fmt(deal.totalConsideration)}\nNER: ${nerStr}\nOutside Broker: ${deal.broker || 'N/A'}\n\n${deal.notes ? `Deal Notes:\n${deal.notes}\n\n` : ''}Please let me know if you have any questions.\n\nThanks,\nIsabelle`
+    });
+  }
+
+  if (deal.stage === 'executed') {
+    emails.push({
+      label: '→ Circulate executed lease to tenant + broker',
+      subject: `Fully Executed Lease — ${deal.property} Suite ${deal.suite} | ${deal.tenant}`,
+      body: `Hi,\n\nPlease find attached the fully executed lease for ${deal.tenant} at ${deal.property}, Suite ${deal.suite}.\n\nFor your records:\n• Commencement Date: ${fmtDate(deal.commence)}\n• Expiration Date: ${expiry}\n• Suite: ${deal.suite} (${deal.sf ? Number(deal.sf).toLocaleString() : '—'} RSF)\n\nPlease don't hesitate to reach out if you have any questions.\n\nBest,\nIsabelle Dunwoody\nLegal Operations & Transaction Manager\nParallel Capital Partners`
+    });
+  }
+
+  return emails;
+}
+
+// ── DEAL MODAL ────────────────────────────────────────────────────────────
+function openDeal(id) {
+  currentDealId = id;
+  const deal = deals.find(d => d.id === id);
+  if (!deal) return;
+  const stage = stageObj(deal.stage);
+
+  document.getElementById('modal-tenant').textContent = deal.tenant;
+  document.getElementById('modal-stage-pill').innerHTML = `<span class="stage-pill ${stage.pill}">${stage.label}</span>`;
+
+  // Overview
+  document.getElementById('d-property').textContent = deal.property;
+  document.getElementById('d-suite').textContent = `Suite ${deal.suite}`;
+  document.getElementById('d-sf').textContent = deal.sf ? `${Number(deal.sf).toLocaleString()} RSF` : '—';
+  document.getElementById('d-type').textContent = `${deal.leasetype} · NNN`;
+  document.getElementById('d-term').textContent = deal.term ? `${deal.term} months` : '—';
+  document.getElementById('d-commence').textContent = fmtDate(deal.commence);
+  document.getElementById('d-rate').textContent = fmtRate(deal.rate);
+  document.getElementById('d-total').textContent = deal.totalConsideration ? `$${fmt(deal.totalConsideration)}` : '—';
+  document.getElementById('d-esc').textContent = deal.esc ? `${deal.esc}% / year` : '—';
+  document.getElementById('d-free').textContent = deal.free ? `${deal.free} month(s)` : 'None';
+  document.getElementById('d-notes').textContent = deal.notes || 'Not yet provided';
+  document.getElementById('d-notes').style.color = deal.notes ? 'var(--ink)' : 'var(--ink3)';
+
+  // Stage selector
+  const sel = document.getElementById('stage-select');
+  sel.innerHTML = STAGES.map(s => `<option value="${s.id}" ${s.id === deal.stage ? 'selected' : ''}>${s.label}</option>`).join('');
+
+  // Progress
+  const stageIdx = STAGES.findIndex(s => s.id === deal.stage);
+  document.getElementById('modal-progress').innerHTML = STAGES.map((s,i) => `
+    <div class="stage-step">
+      <div class="stage-dot ${i < stageIdx ? 'done' : i === stageIdx ? 'current' : ''}">${i < stageIdx ? '✓' : i+1}</div>
+      ${i < STAGES.length-1 ? `<div class="stage-line ${i < stageIdx ? 'done' : ''}"></div>` : ''}
+    </div>`).join('');
+
+  // Actions
+  renderActions(deal);
+
+  // Emails
+  renderEmailsTab(deal);
+
+  // Yardi
+  renderYardiTab(deal);
+
+  // Switch to overview tab
+  switchTab('deal', 'overview');
+  document.getElementById('deal-modal').classList.add('open');
+}
+
+function openDealTab(id, tab) {
+  currentDealId = id;
+  openDeal(id);
+  setTimeout(() => switchTab('deal', tab), 50);
+}
+
+function renderActions(deal) {
+  const stage = stageObj(deal.stage);
+  const days = daysSince(deal.stageDate);
+  let html = '';
+
+  // Checklist for current stage
+  const checklists = {
+    'drafting': [
+      { label: 'Received LOI from Peter and broker', sub: 'Terms locked before drafting begins' },
+      { label: 'Draft lease incorporating all LOI terms', sub: '' },
+      { label: 'Negotiate and redline with tenant', sub: 'Track all changes in Word' },
+      { label: 'Send final draft to tenant via DocuSign', sub: 'Move to next stage once sent' },
+    ],
+    'tenant-signing': [
+      { label: 'Lease sent via DocuSign to tenant', sub: `${days} day(s) since sent` },
+      { label: 'Follow up if >7 days with no signature', sub: days > 7 ? '⚠ Overdue — send a nudge' : 'Not yet needed' },
+      { label: 'Confirm tenant-executed lease received', sub: 'Move to next stage once received' },
+    ],
+    'funds-pending': [
+      { label: 'Contact PM to confirm payment setup', sub: '' },
+      { label: `1st month's rent confirmed received`, sub: deal.rate && deal.sf ? `$${fmt(Number(deal.rate) * Number(deal.sf))}` : '' },
+      { label: `Security deposit confirmed received`, sub: deal.deposit ? `$${fmt(deal.deposit)}` : '' },
+      { label: 'Move to Peter review once both confirmed', sub: '' },
+    ],
+    'peter-review': [
+      { label: 'Send Peter the deal notes request email', sub: `${days} day(s) since stage entered` },
+      { label: 'Attach tenant-executed lease + spreadsheet', sub: '' },
+      { label: 'Receive deal notes from Peter', sub: deal.notes ? '✓ Notes received — add below' : 'Pending' },
+      { label: 'Confirm Peter approval', sub: '' },
+    ],
+    'michael-review': [
+      { label: 'Compile full approval package', sub: 'Lease + Excel + Peter notes' },
+      { label: 'Send to Michael for approval', sub: `${days} day(s) in this stage` },
+      { label: 'Receive Michael approval', sub: '' },
+      { label: 'Send to Jim via DocuSign', sub: '' },
+    ],
+    'jim-signing': [
+      { label: 'Lease sent to Jim via DocuSign', sub: `${days} day(s) since sent` },
+      { label: 'Jim countersigns', sub: '' },
+      { label: 'Fully executed lease received', sub: '' },
+    ],
+    'executed': [
+      { label: 'Circulate executed lease to tenant + broker', sub: '' },
+      { label: 'Send company-wide announcement email', sub: '' },
+      { label: 'Send commission file to Ana\'yah', sub: 'Rent, Abatement + Commissions tab' },
+      { label: 'Abstract lease into Yardi', sub: 'See Yardi Abstract tab' },
+    ],
+    'abstracted': [
+      { label: 'Lease abstracted in Yardi ✓', sub: '' },
+      { label: 'Company email sent ✓', sub: '' },
+      { label: 'Commissions processed by Ana\'yah ✓', sub: '' },
+    ],
+  };
+
+  const items = checklists[deal.stage] || [];
+  if (items.length) {
+    html += `<div class="section-label">Checklist — ${stage.label}</div>
+    <ul class="checklist">${items.map(item => `
+      <li>
+        <input type="checkbox">
+        <div class="check-label">
+          ${item.label}
+          ${item.sub ? `<div class="check-sub">${item.sub}</div>` : ''}
+        </div>
+      </li>`).join('')}</ul>`;
+  }
+
+  // Deal notes input if in peter-review
+  if (deal.stage === 'peter-review') {
+    html += `<div class="form-group" style="margin-top:20px">
+      <label class="form-label">Peter's Deal Notes <span>(paste here when received)</span></label>
+      <textarea class="form-textarea" id="notes-input" placeholder="Paste Peter's deal notes here...">${deal.notes || ''}</textarea>
+      <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="saveNotes()">Save Notes</button>
+    </div>`;
+  }
+
+  document.getElementById('actions-content').innerHTML = html || '<div style="color:var(--ink3);font-size:13px">No actions for this stage.</div>';
+}
+
+function renderEmailsTab(deal) {
+  const emails = getEmailsForStage(deal);
+  const el = document.getElementById('emails-content');
+  if (!emails.length) {
+    el.innerHTML = `<div style="color:var(--ink3);font-size:13px;padding:8px 0">No emails needed for the current stage.</div>`;
+    return;
+  }
+  el.innerHTML = emails.map(e => `
+    <div style="margin-bottom:20px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-weight:600;font-size:14px">${e.label}</div>
+        <button class="btn btn-primary btn-sm" onclick="copyEmail(\`${escape(e.subject)}\`,\`${escape(e.body)}\`)">Copy</button>
+      </div>
+      <div class="email-subject">SUBJECT: ${e.subject}</div>
+      <div class="email-preview">${e.body}</div>
+    </div>`).join('');
+}
+
+function renderYardiTab(deal) {
+  const ner = calcNER(deal);
+  const expiry = calcExpiration(deal.commence, deal.term);
+  const yr1monthly = deal.rate && deal.sf ? Number(deal.rate) * Number(deal.sf) : null;
+  const yr1annual = yr1monthly ? yr1monthly * 12 : null;
+  const yr2rate = deal.rate && deal.esc ? Number(deal.rate) * (1 + Number(deal.esc)/100) : null;
+  const yr2monthly = yr2rate && deal.sf ? yr2rate * Number(deal.sf) : null;
+
+  document.getElementById('yardi-content').innerHTML = `
+    <div style="margin-bottom:12px;font-size:12px;color:var(--ink3)">Copy each value directly into Yardi. All fields auto-calculated from deal data.</div>
+    <table class="yardi-table">
+      <thead><tr><th>Yardi Field</th><th>Value</th></tr></thead>
+      <tbody>
+        <tr class="yardi-section-row"><td colspan="2">Lease Identification</td></tr>
+        <tr><td>Property Name</td><td>${deal.property}</td></tr>
+        <tr><td>Job Type</td><td>${deal.leasetype}</td></tr>
+        <tr><td>Tenant Name (Job Name)</td><td>${deal.tenant}</td></tr>
+        <tr><td>Suite / Space</td><td>${deal.suite}</td></tr>
+        <tr><td>Square Footage</td><td>${deal.sf ? Number(deal.sf).toLocaleString() : '—'}</td></tr>
+        <tr class="yardi-section-row"><td colspan="2">Key Dates</td></tr>
+        <tr><td>Lease Commencement</td><td>${fmtDate(deal.commence)}</td></tr>
+        <tr><td>Lease Expiration</td><td>${expiry}</td></tr>
+        <tr><td>Lease Term (months)</td><td>${deal.term || '—'}</td></tr>
+        <tr><td>Free Rent (months)</td><td>${deal.free || 0}</td></tr>
+        <tr class="yardi-section-row"><td colspan="2">Financials</td></tr>
+        <tr><td>Year 1 Rate ($/RSF/Mo)</td><td>${deal.rate ? `$${Number(deal.rate).toFixed(4)}` : '—'}</td></tr>
+        <tr><td>Year 1 Monthly ($)</td><td>${yr1monthly ? `$${fmt(yr1monthly)}` : '—'}</td></tr>
+        <tr><td>Year 1 Annual ($)</td><td>${yr1annual ? `$${fmt(yr1annual)}` : '—'}</td></tr>
+        <tr><td>Year 2 Rate ($/RSF/Mo)</td><td>${yr2rate ? `$${yr2rate.toFixed(4)}` : '—'}</td></tr>
+        <tr><td>Year 2 Monthly ($)</td><td>${yr2monthly ? `$${fmt(yr2monthly)}` : '—'}</td></tr>
+        <tr><td>Annual Escalation</td><td>${deal.esc ? `${deal.esc}%` : '—'}</td></tr>
+        <tr><td>Total Consideration</td><td>${deal.totalConsideration ? `$${fmt(deal.totalConsideration)}` : '—'}</td></tr>
+        <tr><td>Security Deposit</td><td>${deal.deposit ? `$${fmt(deal.deposit)}` : '—'}</td></tr>
+        <tr><td>NER ($/RSF/Yr)</td><td>${ner ? `$${ner.toFixed(2)}` : '—'}</td></tr>
+        <tr class="yardi-section-row"><td colspan="2">Broker / Commission</td></tr>
+        <tr><td>Outside Broker Agency</td><td>${deal.broker || 'N/A'}</td></tr>
+      </tbody>
+    </table>
+    <button class="btn btn-primary btn-sm" style="margin-top:16px" onclick="copyYardi('${deal.id}')">Copy all as text</button>`;
+}
+
+// ── ACTIONS ───────────────────────────────────────────────────────────────
+function updateStageFromModal() {}
+
+function saveStage() {
+  const deal = deals.find(d => d.id === currentDealId);
+  if (!deal) return;
+  deal.stage = document.getElementById('stage-select').value;
+  deal.stageDate = new Date().toISOString();
+  saveDeals();
+  render();
+  openDeal(currentDealId);
+  toast('Stage updated');
+}
+
+function saveNotes() {
+  const deal = deals.find(d => d.id === currentDealId);
+  if (!deal) return;
+  deal.notes = document.getElementById('notes-input').value;
+  saveDeals();
+  renderActions(deal);
+  toast('Deal notes saved');
+}
+
+function deleteDeal() {
+  if (!confirm('Delete this deal?')) return;
+  deals = deals.filter(d => d.id !== currentDealId);
+  saveDeals();
+  closeModal('deal-modal');
+  render();
+  toast('Deal deleted');
+}
+
+function openAddDeal() {
+  ['f-tenant','f-biztype','f-suite','f-sf','f-term','f-rate','f-esc','f-free','f-deposit','f-broker'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  document.getElementById('f-property').value = '';
+  document.getElementById('f-leasetype').value = 'New';
+  document.getElementById('f-stage').value = 'drafting';
+  document.getElementById('f-commence').value = '';
+  document.getElementById('add-modal').classList.add('open');
+}
+
+function saveDeal() {
+  const tenant = document.getElementById('f-tenant').value.trim();
+  const property = document.getElementById('f-property').value;
+  const suite = document.getElementById('f-suite').value.trim();
+  if (!tenant || !property || !suite) { alert('Please fill in Tenant, Property, and Suite.'); return; }
+
+  const sf = Number(document.getElementById('f-sf').value) || 0;
+  const rate = Number(document.getElementById('f-rate').value) || 0;
+  const term = Number(document.getElementById('f-term').value) || 0;
+  const totalConsideration = sf && rate && term ? (() => {
+    const esc = Number(document.getElementById('f-esc').value)/100 || 0;
+    const free = Number(document.getElementById('f-free').value) || 0;
+    let total = 0, monthly = rate * sf;
+    for (let m = 0; m < term; m++) {
+      const yr = Math.floor(m/12);
+      const mo = monthly * Math.pow(1+esc, yr);
+      if (m >= free) total += mo;
+    }
+    return total;
+  })() : 0;
+
+  const deal = {
+    id: 'd' + Date.now(),
+    tenant, property, suite,
+    biztype: document.getElementById('f-biztype').value.trim(),
+    sf: sf || '',
+    leasetype: document.getElementById('f-leasetype').value,
+    term: term || '',
+    commence: document.getElementById('f-commence').value,
+    rate: rate || '',
+    esc: document.getElementById('f-esc').value || '',
+    free: document.getElementById('f-free').value || 0,
+    deposit: document.getElementById('f-deposit').value || '',
+    broker: document.getElementById('f-broker').value.trim(),
+    stage: document.getElementById('f-stage').value,
+    stageDate: new Date().toISOString(),
+    notes: '',
+    totalConsideration: totalConsideration || ''
+  };
+  deals.unshift(deal);
+  saveDeals();
+  closeModal('add-modal');
+  render();
+  toast('Deal added');
+}
+
+// ── EMAIL / COPY ──────────────────────────────────────────────────────────
+function escape(str) { return str.replace(/`/g,'\\`').replace(/\$/g,'\\$'); }
+
+function copyEmail(subject, body) {
+  const text = `Subject: ${unescape(subject)}\n\n${unescape(body)}`;
+  navigator.clipboard.writeText(text).catch(() => {});
+  toast('Email copied to clipboard — paste into Outlook');
+}
+
+function unescape(str) {
+  try { return decodeURIComponent(str); } catch(e) { return str; }
+}
+
+function copyYardi(id) {
+  const deal = deals.find(d => d.id === id);
+  if (!deal) return;
+  const ner = calcNER(deal);
+  const expiry = calcExpiration(deal.commence, deal.term);
+  const yr1monthly = deal.rate && deal.sf ? Number(deal.rate) * Number(deal.sf) : null;
+  const text = [
+    'YARDI ABSTRACT',
+    '==============',
+    `Property: ${deal.property}`,
+    `Job Type: ${deal.leasetype}`,
+    `Tenant: ${deal.tenant}`,
+    `Suite: ${deal.suite}`,
+    `SF: ${deal.sf ? Number(deal.sf).toLocaleString() : '—'}`,
+    '',
+    `Commencement: ${fmtDate(deal.commence)}`,
+    `Expiration: ${expiry}`,
+    `Term: ${deal.term} months`,
+    `Free Rent: ${deal.free || 0} months`,
+    '',
+    `Year 1 Rate: $${deal.rate ? Number(deal.rate).toFixed(4) : '—'}/RSF/Mo`,
+    `Year 1 Monthly: $${fmt(yr1monthly)}`,
+    `Escalation: ${deal.esc}%`,
+    `Total Consideration: $${fmt(deal.totalConsideration)}`,
+    `Security Deposit: $${fmt(deal.deposit)}`,
+    `NER: $${ner ? ner.toFixed(2) : '—'}/RSF/Yr`,
+    '',
+    `Outside Broker: ${deal.broker || 'N/A'}`,
+  ].join('\n');
+  navigator.clipboard.writeText(text).catch(() => {});
+  toast('Yardi abstract copied to clipboard');
+}
+
+// ── UI HELPERS ────────────────────────────────────────────────────────────
+function showPage(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  document.getElementById('nav-' + page)?.classList.add('active');
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+function switchTab(prefix, tab) {
+  document.querySelectorAll(`#${prefix}-modal .modal-tab`).forEach(t => t.classList.remove('active'));
+  document.querySelectorAll(`#${prefix}-modal .modal-tab-content`).forEach(t => t.classList.remove('active'));
+  const tabs = document.querySelectorAll(`#${prefix}-modal .modal-tab`);
+  const tabNames = ['overview','actions','emails','yardi'];
+  const idx = tabNames.indexOf(tab);
+  if (tabs[idx]) tabs[idx].classList.add('active');
+  const content = document.getElementById(`${prefix}-tab-${tab}`);
+  if (content) content.classList.add('active');
+}
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  document.getElementById('toast-msg').textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2800);
+}
+
+// Close modal on overlay click
+document.querySelectorAll('.modal-overlay').forEach(o => {
+  o.addEventListener('click', e => { if (e.target === o) o.classList.remove('open'); });
+});
+
+
+// ── UPLOAD & EXTRACTION ───────────────────────────────────────────────────
+let selectedDocType = 'loi';
+let selectedFile = null;
+let extractedData = null;
+
+const PROPERTY_LIST = [
+  'Rose Canyon — Building 100','Rose Canyon — Building 200','Rose Canyon — Building 300',
+  'Rose Canyon — Building 400','Rose Canyon — Building 500','Rose Canyon — Building 600',
+  'Rose Canyon — Building 700','Rose Canyon — Building 800','Rose Canyon — Building 900',
+  'Rose Canyon — Building 1000','Rose Canyon — Building 1100','Rose Canyon — Building 1200',
+  'Rose Canyon — Building 1300','Rose Canyon — Building 1400','Rose Canyon — Courtyard',
+  'The Ranch','Matter Gateway','Matter Gateway — 1371 Raiders Way','Matter Gateway — 1395 Raiders Way',
+  'UnCommons — Parking Structure 1','UnCommons — Market Hall','UnCommons — Courtyard',
+  'UnCommons — Office 2','UnCommons — Parking Structure 2','UnCommons — Office 1',
+  'UnCommons II — OB3','UnCommons II — OB4','UnCommons II — The Assembly',
+  'One North Central','Santa Fe — 5965 Santa Fe St','Santa Fe — 5975 Santa Fe St',
+  'Torrey Center','Waikiki Marketplace','Waterfront Plaza'
+];
+
+function selectDocType(type) {
+  selectedDocType = type;
+  document.querySelectorAll('.doc-type-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`[data-type="${type}"]`).classList.add('active');
+}
+
+function handleFileSelect(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  selectedFile = file;
+  document.getElementById('upload-file-name').textContent = `Selected: ${file.name} (${(file.size/1024).toFixed(0)} KB)`;
+  document.getElementById('extract-btn').disabled = false;
+  const dz = document.getElementById('drop-zone');
+  dz.querySelector('.drop-zone-text').textContent = file.name;
+  dz.querySelector('.drop-zone-sub').textContent = `${(file.size/1024).toFixed(0)} KB · Click to change`;
+}
+
+// Drag and drop
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) { selectedFile = file; handleFileSelect({target:{files:[file]}}); }
+});
+
+function populateUploadDealSelect() {
+  const sel = document.getElementById('upload-deal-select');
+  const active = deals.filter(d => d.stage !== 'abstracted');
+  sel.innerHTML = '<option value="new">＋ Create new deal from this document</option>' +
+    active.map(d => `<option value="${d.id}">${d.tenant} — ${d.property} Suite ${d.suite}</option>`).join('');
+}
+
+async function readFileAsArrayBuffer(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = rej;
+    r.readAsArrayBuffer(file);
+  });
+}
+
+async function readFileAsText(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = rej;
+    r.readAsText(file);
+  });
+}
+
+async function extractTextFromFile(file) {
+  const name = file.name.toLowerCase();
+
+  if (name.endsWith('.pdf')) {
+    // Use PDF.js to extract text
+    const arrayBuffer = await readFileAsArrayBuffer(file);
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let text = '';
+    const maxPages = Math.min(pdf.numPages, 30); // cap at 30 pages
+    for (let i = 1; i <= maxPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map(item => item.str).join(' ') + '\n';
+    }
+    return text.trim();
+  }
+
+  if (name.endsWith('.docx')) {
+    // Use mammoth.js to extract text from DOCX
+    const arrayBuffer = await readFileAsArrayBuffer(file);
+    const result = await mammoth.extractRawText({ arrayBuffer });
+    return result.value.trim();
+  }
+
+  if (name.endsWith('.doc')) {
+    throw new Error('Legacy .doc files are not supported. Please save as .docx or .pdf and try again.');
+  }
+
+  // Fallback: try reading as plain text
+  return await readFileAsText(file);
+}
+
+async function extractDocument() {
+  if (!selectedFile) return;
+  document.getElementById('extraction-results').style.display = 'none';
+  document.getElementById('extraction-loading').style.display = 'block';
+  document.getElementById('extract-btn').disabled = true;
+
+  const msgs = [
+    'Reading document...', 'Extracting text...',
+    'Identifying lease terms...', 'Analyzing financials...', 'Almost done...'
+  ];
+  let mi = 0;
+  const msgEl = document.getElementById('loading-msg');
+  const interval = setInterval(() => { if (mi < msgs.length - 1) msgEl.textContent = msgs[++mi]; }, 2200);
+
+  try {
+    // Step 1: Extract text from file in browser (no CORS issue)
+    msgEl.textContent = 'Reading document...';
+    let docText;
+    try {
+      docText = await extractTextFromFile(selectedFile);
+    } catch(e) {
+      throw new Error('Could not read file: ' + e.message);
+    }
+
+    if (!docText || docText.length < 50) {
+      throw new Error('Could not extract text from this file. If it\'s a scanned PDF (image-only), text extraction is not possible. Try a text-based PDF or DOCX.');
+    }
+
+    // Trim to ~12k chars to stay within token limits
+    const trimmedText = docText.length > 12000 ? docText.substring(0, 12000) + '\n...[truncated]' : docText;
+
+    msgEl.textContent = 'Sending to AI for analysis...';
+
+    const docTypeLabels = { loi: 'Letter of Intent (LOI)', draft: 'Lease Draft', executed: 'Tenant-Signed Lease' };
+
+    const systemPrompt = `You are a commercial real estate lease abstraction specialist for Parallel Capital Partners. Extract lease terms and return ONLY valid JSON, no markdown, no preamble, no explanation — just the raw JSON object.
+
+Known properties: ${PROPERTY_LIST.join(', ')}.
+
+Match the property_name exactly to one of the known properties above if possible.
+
+Return this exact JSON (use null for any field not found, never omit a key):
+{"tenant_name":null,"business_type":null,"property_name":null,"suite_number":null,"square_footage":null,"lease_type":null,"term_months":null,"commencement_date":null,"expiration_date":null,"execution_date":null,"base_rent_year1_monthly":null,"base_rent_year1_psf_mo":null,"annual_escalation_pct":null,"free_rent_months":null,"security_deposit":null,"ti_allowance_psf":null,"ti_allowance_total":null,"outside_broker_agency":null,"listing_broker_agency":null,"total_consideration":null,"confidence":{"tenant_name":"high","property_name":"high","commencement_date":"high","base_rent_year1_psf_mo":"high","term_months":"high"},"notes":null}
+
+Rules:
+- lease_type must be exactly "New", "Renewal", or "Expansion"
+- dates must be in MM/DD/YYYY format
+- annual_escalation_pct should be a number like 4 (not 0.04)
+- square_footage and term_months must be numbers
+- If no outside broker, set outside_broker_agency to "N/A"
+- confidence values: "high" = explicitly stated, "medium" = inferred, "low" = guessed`;
+
+    // Step 2: Send extracted text to API (text-only, no binary = no CORS issue with fetch)
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-dangerous-direct-browser-calls': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        system: systemPrompt,
+        messages: [{
+          role: 'user',
+          content: `This is a ${docTypeLabels[selectedDocType]}. Extract all lease terms.\n\n---\n${trimmedText}\n---`
+        }]
+      })
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text();
+      throw new Error(`API error ${response.status}: ${errBody.substring(0, 200)}`);
+    }
+
+    const data = await response.json();
+    clearInterval(interval);
+
+    const raw = data.content?.find(b => b.type === 'text')?.text || '{}';
+    const clean = raw.replace(/```json|```/g, '').trim();
+
+    let parsed;
+    try {
+      parsed = JSON.parse(clean);
+    } catch(e) {
+      // Try to extract JSON from response if it has surrounding text
+      const match = clean.match(/\{[\s\S]*\}/);
+      if (match) parsed = JSON.parse(match[0]);
+      else throw new Error('AI returned invalid JSON. Raw response: ' + clean.substring(0, 300));
+    }
+
+    extractedData = parsed;
+    showExtractionResults(extractedData);
+
+  } catch(err) {
+    clearInterval(interval);
+    document.getElementById('extraction-loading').style.display = 'none';
+    document.getElementById('extract-btn').disabled = false;
+
+    let msg = err.message;
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+      msg = 'Network error — make sure you\'re connected to the internet and try again.\n\nIf this keeps happening, the Anthropic API may be temporarily unavailable.';
+    }
+    alert('Extraction failed:\n\n' + msg);
+  }
+}
+
+function showExtractionResults(data) {
+  document.getElementById('extraction-loading').style.display = 'none';
+  document.getElementById('extraction-results').style.display = 'block';
+  document.getElementById('extract-btn').disabled = false;
+
+  // Confidence bar
+  const conf = data.confidence || {};
+  const highCount = Object.values(conf).filter(v => v === 'high').length;
+  const total = Object.values(conf).length || 5;
+  const pct = Math.round(highCount / total * 100);
+  document.getElementById('confidence-bar').innerHTML = `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+      <span class="confidence-pill ${pct >= 80 ? 'conf-high' : 'conf-med'}">
+        ${pct >= 80 ? '✓ High confidence' : '⚠ Review flagged fields'}
+      </span>
+      <span style="font-size:12px;color:var(--ink3)">${highCount}/${total} key fields extracted with high confidence</span>
+    </div>
+    ${data.notes ? `<div style="font-size:12px;color:var(--ink3);padding:8px 12px;background:var(--paper2);border-radius:6px">${data.notes}</div>` : ''}`;
+
+  const fields = [
+    { key:'tenant_name',            label:'Tenant Name',                  tab:'nle',  cell:'C8' },
+    { key:'business_type',          label:'Business Type / Industry',     tab:'nle',  cell:'C9' },
+    { key:'property_name',          label:'Property Name',                tab:'rac',  cell:'C8' },
+    { key:'suite_number',           label:'Suite Number(s)',              tab:'nle',  cell:'C10' },
+    { key:'square_footage',         label:'Square Footage (RSF)',         tab:'rac',  cell:'C15' },
+    { key:'lease_type',             label:'Lease Type',                   tab:'rac',  cell:'C10' },
+    { key:'term_months',            label:'Lease Term (months)',          tab:'nle',  cell:'C16' },
+    { key:'commencement_date',      label:'Rent Commencement',            tab:'rac',  cell:'C13' },
+    { key:'expiration_date',        label:'Expiration Date',              tab:'nle',  cell:'C15' },
+    { key:'execution_date',         label:'Execution Date',               tab:'rac',  cell:'C12' },
+    { key:'base_rent_year1_psf_mo', label:'Year 1 Rate ($/RSF/Mo)',       tab:'rac',  cell:'I9' },
+    { key:'annual_escalation_pct',  label:'Annual Escalation (%)',        tab:'nle',  cell:'C20' },
+    { key:'free_rent_months',       label:'Free Rent (months)',           tab:'rac',  cell:'H8' },
+    { key:'security_deposit',       label:'Security Deposit ($)',         tab:'nle',  cell:'C23' },
+    { key:'ti_allowance_psf',       label:'TI Allowance ($/SF)',          tab:'nle',  cell:'C27' },
+    { key:'ti_allowance_total',     label:'TI Allowance Total ($)',       tab:'nle',  cell:'C28' },
+    { key:'outside_broker_agency',  label:'Outside Broker Agency',        tab:'rac',  cell:'C25' },
+    { key:'listing_broker_agency',  label:'Listing Broker Agency',        tab:'rac',  cell:'C26' },
+    { key:'total_consideration',    label:'Total Consideration ($)',      tab:'rac',  cell:'—' },
+  ];
+
+  const grid = document.getElementById('extracted-fields-grid');
+  grid.innerHTML = fields.map(f => {
+    const val = data[f.key];
+    const c = conf[f.key] || (val !== null && val !== undefined ? 'medium' : null);
+    const displayVal = val !== null && val !== undefined ? val : null;
+    const cls = c === 'high' ? '' : c === 'medium' ? 'uncertain' : 'missing';
+    const display = displayVal !== null ? displayVal : 'Not found';
+    return `<div class="extracted-field">
+      <div class="extracted-field-label">${f.label} <span style="color:var(--ink3);font-size:10px">→ ${f.tab==='nle'?'New Lease Entry':'Rent/Commission'} ${f.cell}</span></div>
+      <div class="extracted-field-value ${displayVal===null?'missing':cls}">${display}</div>
+      <input type="text" value="${displayVal !== null ? displayVal : ''}" placeholder="Enter manually" data-key="${f.key}" oninput="extractedData['${f.key}']=this.value">
+    </div>`;
+  }).join('');
+}
+
+function resetUpload() {
+  selectedFile = null;
+  extractedData = null;
+  document.getElementById('extraction-results').style.display = 'none';
+  document.getElementById('upload-file-name').textContent = '';
+  document.getElementById('extract-btn').disabled = true;
+  const dz = document.getElementById('drop-zone');
+  dz.querySelector('.drop-zone-text').textContent = 'Drop your document here or click to browse';
+  dz.querySelector('.drop-zone-sub').textContent = 'PDF or DOCX · LOI, lease draft, or executed lease';
+  document.getElementById('file-input').value = '';
+}
+
+async function applyExtracted() {
+  if (!extractedData) return;
+  const dealSelectVal = document.getElementById('upload-deal-select').value;
+
+  // Map extracted data to deal object fields
+  const esc = extractedData.annual_escalation_pct;
+  const sf = Number(extractedData.square_footage) || 0;
+  const rate = Number(extractedData.base_rent_year1_psf_mo) || 0;
+  const term = Number(extractedData.term_months) || 0;
+  const freeMonths = Number(extractedData.free_rent_months) || 0;
+  const escPct = esc ? Number(esc)/100 : 0;
+  let totalConsideration = extractedData.total_consideration || 0;
+  if (!totalConsideration && sf && rate && term) {
+    let tot = 0, monthly = rate * sf;
+    for (let m = 0; m < term; m++) {
+      const yr = Math.floor(m/12);
+      const mo = monthly * Math.pow(1+escPct, yr);
+      if (m >= freeMonths) tot += mo;
+    }
+    totalConsideration = tot;
+  }
+
+  const dealData = {
+    tenant: extractedData.tenant_name || '',
+    biztype: extractedData.business_type || '',
+    property: extractedData.property_name || '',
+    suite: extractedData.suite_number || '',
+    sf: sf || '',
+    leasetype: extractedData.lease_type || 'New',
+    term: term || '',
+    commence: extractedData.commencement_date ? toISODate(extractedData.commencement_date) : '',
+    rate: rate || '',
+    esc: esc || '',
+    free: freeMonths,
+    deposit: extractedData.security_deposit || '',
+    broker: extractedData.outside_broker_agency || '',
+    totalConsideration: totalConsideration || '',
+    executionDate: extractedData.execution_date || '',
+    tiPsf: extractedData.ti_allowance_psf || 0,
+    tiTotal: extractedData.ti_allowance_total || 0,
+  };
+
+  if (dealSelectVal === 'new') {
+    // Create new deal
+    const newDeal = {
+      id: 'd' + Date.now(),
+      ...dealData,
+      stage: selectedDocType === 'executed' ? 'funds-pending' : selectedDocType === 'draft' ? 'tenant-signing' : 'drafting',
+      stageDate: new Date().toISOString(),
+      notes: ''
+    };
+    deals.unshift(newDeal);
+    await saveDeals();
+    toast('Deal created from document');
+  } else {
+    // Update existing deal
+    const deal = deals.find(d => d.id === dealSelectVal);
+    if (deal) {
+      Object.keys(dealData).forEach(k => { if (dealData[k]) deal[k] = dealData[k]; });
+      await saveDeals();
+      toast('Deal updated from document');
+    }
+  }
+
+  // Generate and download the pre-filled spreadsheet
+  await generateSpreadsheet(extractedData, dealData);
+  render();
+  populateUploadDealSelect();
+  showPage('dashboard');
+}
+
+function toISODate(str) {
+  if (!str) return '';
+  // Handle MM/DD/YYYY
+  const m = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`;
+  return str;
+}
+
+async function generateSpreadsheet(extracted, deal) {
+  // We generate a CSV-based data file for now since we can't run openpyxl in browser
+  // Instead we create a structured text file with all the fields labeled for easy copy-paste
+  const lines = [
+    '=== PARALLEL CP — LEASE SPREADSHEET DATA ===',
+    `Generated: ${new Date().toLocaleString()}`,
+    '',
+    '--- RENT, ABATEMENT + COMMISSIONS TAB ---',
+    `Property Name (C8): ${extracted.property_name || ''}`,
+    `Property Code (C9): [auto-lookup from Lookup Data]`,
+    `Job Type (C10): ${extracted.lease_type || 'New'}`,
+    `Tenant Name (C11): ${extracted.tenant_name || ''}`,
+    `Execution Date (C12): ${extracted.execution_date || ''}`,
+    `Rent Commencement (C13): ${extracted.commencement_date || ''}`,
+    `Total Consideration (C14): [auto-calculated]`,
+    `Square Footage (C15): ${extracted.square_footage || ''}`,
+    `Abatement Months (H8): ${extracted.free_rent_months || 0}`,
+    `Year 1 Months (H9): ${extracted.term_months && Number(extracted.term_months) >= 12 ? 12 : extracted.term_months || ''}`,
+    `Year 1 Rate $/RSF/Mo (I9): ${extracted.base_rent_year1_psf_mo || ''}`,
+    `Outside Broker Agency (C25): ${extracted.outside_broker_agency || 'N/A'}`,
+    `Listing Broker Agency (C26): ${extracted.listing_broker_agency || 'N/A'}`,
+    '',
+    '--- NEW LEASE ENTRY TAB ---',
+    `Business Type / Industry (C9): ${extracted.business_type || ''}`,
+    `Suite Number(s) (C10): ${extracted.suite_number || ''}`,
+    `Expiration Date (C15): ${extracted.expiration_date || ''}`,
+    `Lease Term in months (C16): ${extracted.term_months || ''}`,
+    `Annual Rent Escalation (C20): ${extracted.annual_escalation_pct ? Number(extracted.annual_escalation_pct)/100 : ''}`,
+    `Security Deposit Collected (C23): ${extracted.security_deposit || ''}`,
+    `LL Work / TI Allowance Rate $/SF (C27): ${extracted.ti_allowance_psf || 0}`,
+    `LL Work / TI Allowance Total (C28): ${extracted.ti_allowance_total || 0}`,
+    '',
+    '--- NOTES ---',
+    extracted.notes || 'None',
+  ];
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${(extracted.tenant_name || 'deal').replace(/[^a-z0-9]/gi,'_')}_lease_data.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('Spreadsheet data downloaded — open and copy into Excel template');
+}
+
+// Populate deal select when navigating to upload page
+const origShowPage = showPage;
+window.showPage = function(page) {
+  origShowPage(page);
+  if (page === 'upload') populateUploadDealSelect();
+};
+
+</script>
+</body>
+</html>
